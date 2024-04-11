@@ -1,18 +1,25 @@
 #!/bin/bash
 
-# verbose flag
+# Verbose flag
 verbose=0
 
-# log messages
+# Log messages
 log_and_echo() {
     local message=$1
-    logger "$message"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    logger "$timestamp $message"  # Logging to syslog
     if [ "$verbose" -eq 1 ]; then
-        echo "$message"
+        echo "$timestamp $message"
     fi
 }
 
-# change the hostname
+# script run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+# Changing the hostname
 change_hostname() {
     local desired_name=$1
     local current_hostname=$(hostname)
@@ -27,14 +34,21 @@ change_hostname() {
     fi
 }
 
-# Function to update IP address
+# Updating IP address
 change_ip_address() {
     local desired_ip=$1
-    # This is a placeholder for the actual commands you would use to change the IP address
-    log_and_echo "IP address change to $desired_ip simulated."
+    local interface=$(ip route get 1 | awk '{print $5; exit}')
+    ip addr add $desired_ip/24 dev $interface
+    ip route add default via $(echo $desired_ip | sed -r 's/\.[0-9]+$/.1/')
+    if [ $? -eq 0 ]; then
+        log_and_echo "IP address changed to $desired_ip on interface $interface"
+    else
+        echo "Failed to change IP address to $desired_ip on interface $interface"
+        exit 1
+    fi
 }
 
-# Function to add a host entry
+# host entry
 add_host_entry() {
     local name=$1
     local ip=$2
@@ -46,31 +60,36 @@ add_host_entry() {
     fi
 }
 
-# command-line arguments
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -verbose)
+# Command-line arguments
+while getopts ":v:name:ip:hostentry:" opt; do
+    case $opt in
+        v)
             verbose=1
             ;;
-        -name)
-            desired_name="$2"
-            shift
+        name)
+            desired_name=$OPTARG
             ;;
-        -ip)
-            desired_ip="$2"
-            shift
+        ip)
+            desired_ip=$OPTARG
             ;;
-        -hostentry)
-            host_name="$2"
-            host_ip="$3"
-            shift 2
+        hostentry)
+            IFS=' ' read -ra ADDR <<< "$OPTARG"
+            host_name=${ADDR[0]}
+            host_ip=${ADDR[1]}
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+        :)
+            echo "Option -$OPTARG requires an argument." >&2
+            exit 1
             ;;
     esac
-    shift
 done
+shift $((OPTIND -1))
 
-# Execute configuration changes based on arguments
+# configuration changes
 [ ! -z "$desired_name" ] && change_hostname "$desired_name"
 [ ! -z "$desired_ip" ] && change_ip_address "$desired_ip"
 [ ! -z "$host_name" ] && add_host_entry "$host_name" "$host_ip"
-
